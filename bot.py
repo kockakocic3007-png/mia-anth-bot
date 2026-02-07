@@ -4,6 +4,8 @@ import urllib.parse as urlparse
 from datetime import datetime, timedelta
 import time
 import random
+from flask import Flask
+from threading import Thread
 
 # 🔥 VAŠI PODACI
 BOT_TOKEN = "8335453036:AAHtJccB5FgalVocPAo52L_9miyTI4VqOsY"
@@ -537,6 +539,33 @@ def reject_user(message):
     except Exception as e:
         safe_send_message(message.chat.id, f"❌ Error: {e}")
 
+# ========== FLASK SERVER FOR RENDER ==========
+print("\n🌐 Starting Flask server for Render...")
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "✅ Mia Anth Bot is running!"
+
+@app.route('/health')
+def health():
+    return "🟢 Bot is healthy", 200
+
+@app.route('/ping')
+def ping():
+    return "pong", 200
+
+def run_flask():
+    port = int(os.environ.get('PORT', 8080))
+    print(f"🌍 Flask server starting on port {port}...")
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+
+# Pokreni Flask u pozadini
+flask_thread = Thread(target=run_flask, daemon=True)
+flask_thread.start()
+print(f"✅ Flask server started on port {os.environ.get('PORT', 8080)}")
+
 # ========== MAIN LOOP ==========
 print("\n" + "=" * 60)
 print("✅ BOT IS READY")
@@ -559,20 +588,27 @@ print("\n⏰ AUTO-FEATURES:")
 print("   • Group messages every 14 hours")
 print("   • All admins get PAYMENT SCREENSHOTS")
 print("=" * 60)
-print("\n⏳ Bot starting...")
+print("\n⏳ Starting Telegram bot polling...")
 
 # Tajmer za grupu
 last_group_message = datetime.now()
 
-while True:
-    try:
-        bot.polling(none_stop=True, interval=2, timeout=30)
-        
+# Pokreni Telegram bota u glavnoj niti
+try:
+    # Pokreni polling
+    bot.polling(none_stop=True, interval=2, timeout=30)
+    
+    # Ova petlja se izvršava dok bot radi
+    while True:
         # Grupna poruka svakih 14 sati
-        if (datetime.now() - last_group_message).seconds >= 50400:
-            send_group_message()
-            last_group_message = datetime.now()
-            
-    except Exception as e:
-        print(f"❌ Error: {e}")
-        time.sleep(10)
+        if (datetime.now() - last_group_message).seconds >= 50400:  # 14 sati = 50400 sekundi
+            if send_group_message():
+                last_group_message = datetime.now()
+        
+        # Proveri na svakih 5 minuta
+        time.sleep(300)
+        
+except Exception as e:
+    print(f"❌ Bot crashed: {e}")
+    print("🔄 Restarting in 10 seconds...")
+    time.sleep(10)

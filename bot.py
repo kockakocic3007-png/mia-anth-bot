@@ -16,6 +16,9 @@ PRIVATE_CHANNEL_LINK = "https://t.me/+YvJdDpxnyqJhMmU0"
 SUBSCRIPTION_DAYS = 30
 MAIN_GROUP_ID = -1003896893394
 
+# 🔗 POSTGRESQL DATABASE URL (OVO JE TVOJ)
+DATABASE_URL = "postgresql://mia_bot_user:j0tQFEAvXyNB9D2Xp0gM0lX11ZzmBFcN@dpg-d63jhpshg0os73cht1bg-a/mia_bot_db"
+
 bot = telebot.TeleBot(BOT_TOKEN)
 
 print("=" * 60)
@@ -54,17 +57,10 @@ def safe_send_message(chat_id, text, parse_mode='Markdown'):
 
 # ========== POSTGRESQL DATABASE SETUP ==========
 print("🔗 Connecting to PostgreSQL database...")
+print(f"📊 Database URL: {DATABASE_URL[:50]}...")
 
-# Uzima DATABASE_URL iz environment variables
-DATABASE_URL = os.environ.get('DATABASE_URL')
-
-if not DATABASE_URL:
-    print("⚠️ DATABASE_URL not found! Using in-memory SQLite.")
-    import sqlite3
-    conn = sqlite3.connect(':memory:', check_same_thread=False)
-    cursor = conn.cursor()
-else:
-    print(f"📊 Database URL found: {DATABASE_URL[:30]}...")
+try:
+    import psycopg2
     
     # Parsiraj URL za PostgreSQL
     url = urlparse.urlparse(DATABASE_URL)
@@ -74,47 +70,45 @@ else:
     host = url.hostname
     port = url.port
     
-    try:
-        import psycopg2
-        conn = psycopg2.connect(
-            dbname=dbname,
-            user=user,
-            password=password,
-            host=host,
-            port=port
-        )
-        conn.autocommit = False
-        cursor = conn.cursor()
-        print("✅ Connected to PostgreSQL database!")
-        
-        # Kreiraj tabele ako ne postoje
-        cursor.execute('''CREATE TABLE IF NOT EXISTS users
-                          (user_id BIGINT PRIMARY KEY,
-                           username TEXT,
-                           payment_date TEXT,
-                           expiry_date TEXT,
-                           status TEXT DEFAULT 'pending',
-                           used_invite INTEGER DEFAULT 0)''')
-        
-        cursor.execute('''CREATE TABLE IF NOT EXISTS pending_approvals
-                          (user_id BIGINT PRIMARY KEY,
-                           username TEXT,
-                           request_time TEXT)''')
-        
-        cursor.execute('''CREATE TABLE IF NOT EXISTS banned_users
-                          (user_id BIGINT PRIMARY KEY,
-                           username TEXT,
-                           ban_date TEXT,
-                           reason TEXT)''')
-        conn.commit()
-        print("✅ Database tables created/verified")
-        
-    except Exception as e:
-        print(f"❌ PostgreSQL connection failed: {e}")
-        print("⚠️ Falling back to in-memory SQLite")
-        import sqlite3
-        conn = sqlite3.connect(':memory:', check_same_thread=False)
-        cursor = conn.cursor()
+    conn = psycopg2.connect(
+        dbname=dbname,
+        user=user,
+        password=password,
+        host=host,
+        port=port
+    )
+    conn.autocommit = False
+    cursor = conn.cursor()
+    print("✅ Connected to PostgreSQL database!")
+    
+    # Kreiraj tabele ako ne postoje
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users
+                      (user_id BIGINT PRIMARY KEY,
+                       username TEXT,
+                       payment_date TEXT,
+                       expiry_date TEXT,
+                       status TEXT DEFAULT 'pending',
+                       used_invite INTEGER DEFAULT 0)''')
+    
+    cursor.execute('''CREATE TABLE IF NOT EXISTS pending_approvals
+                      (user_id BIGINT PRIMARY KEY,
+                       username TEXT,
+                       request_time TEXT)''')
+    
+    cursor.execute('''CREATE TABLE IF NOT EXISTS banned_users
+                      (user_id BIGINT PRIMARY KEY,
+                       username TEXT,
+                       ban_date TEXT,
+                       reason TEXT)''')
+    conn.commit()
+    print("✅ Database tables created/verified")
+    
+except Exception as e:
+    print(f"❌ PostgreSQL connection failed: {e}")
+    print("⚠️ Falling back to in-memory SQLite")
+    import sqlite3
+    conn = sqlite3.connect(':memory:', check_same_thread=False)
+    cursor = conn.cursor()
 
 # ========== HELPER FUNCTIONS ==========
 def calculate_expiry_date():

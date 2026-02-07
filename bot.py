@@ -1,6 +1,6 @@
 import telebot
-import sqlite3
 import os
+import urllib.parse as urlparse
 from datetime import datetime, timedelta
 import time
 import random
@@ -17,7 +17,7 @@ MAIN_GROUP_ID = -1003896893394
 bot = telebot.TeleBot(BOT_TOKEN)
 
 print("=" * 60)
-print("🤖 MIA ANTH BOT - WITH PHOTO FORWARDING")
+print("🤖 MIA ANTH BOT - WITH POSTGRESQL DATABASE")
 print("=" * 60)
 
 # ========== HELPER FUNCTIONS ==========
@@ -50,37 +50,69 @@ def safe_send_message(chat_id, text, parse_mode='Markdown'):
         except:
             return None
 
-# ========== DATABASE SETUP ==========
-DB_PATH = 'mia_subscribers.db'
-try:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    cursor = conn.cursor()
-    
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users
-                      (user_id INTEGER PRIMARY KEY,
-                       username TEXT,
-                       payment_date TEXT,
-                       expiry_date TEXT,
-                       status TEXT DEFAULT 'pending',
-                       used_invite INTEGER DEFAULT 0)''')
-    
-    cursor.execute('''CREATE TABLE IF NOT EXISTS pending_approvals
-                      (user_id INTEGER PRIMARY KEY,
-                       username TEXT,
-                       request_time TEXT)''')
-    
-    cursor.execute('''CREATE TABLE IF NOT EXISTS banned_users
-                      (user_id INTEGER PRIMARY KEY,
-                       username TEXT,
-                       ban_date TEXT,
-                       reason TEXT)''')
-    conn.commit()
-    print("✅ Database initialized")
-    
-except Exception as e:
-    print(f"❌ Database error: {e}")
+# ========== POSTGRESQL DATABASE SETUP ==========
+print("🔗 Connecting to PostgreSQL database...")
+
+# Uzima DATABASE_URL iz environment variables
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
+if not DATABASE_URL:
+    print("⚠️ DATABASE_URL not found! Using in-memory SQLite.")
+    import sqlite3
     conn = sqlite3.connect(':memory:', check_same_thread=False)
     cursor = conn.cursor()
+else:
+    print(f"📊 Database URL found: {DATABASE_URL[:30]}...")
+    
+    # Parsiraj URL za PostgreSQL
+    url = urlparse.urlparse(DATABASE_URL)
+    dbname = url.path[1:]
+    user = url.username
+    password = url.password
+    host = url.hostname
+    port = url.port
+    
+    try:
+        import psycopg2
+        conn = psycopg2.connect(
+            dbname=dbname,
+            user=user,
+            password=password,
+            host=host,
+            port=port
+        )
+        conn.autocommit = False
+        cursor = conn.cursor()
+        print("✅ Connected to PostgreSQL database!")
+        
+        # Kreiraj tabele ako ne postoje
+        cursor.execute('''CREATE TABLE IF NOT EXISTS users
+                          (user_id BIGINT PRIMARY KEY,
+                           username TEXT,
+                           payment_date TEXT,
+                           expiry_date TEXT,
+                           status TEXT DEFAULT 'pending',
+                           used_invite INTEGER DEFAULT 0)''')
+        
+        cursor.execute('''CREATE TABLE IF NOT EXISTS pending_approvals
+                          (user_id BIGINT PRIMARY KEY,
+                           username TEXT,
+                           request_time TEXT)''')
+        
+        cursor.execute('''CREATE TABLE IF NOT EXISTS banned_users
+                          (user_id BIGINT PRIMARY KEY,
+                           username TEXT,
+                           ban_date TEXT,
+                           reason TEXT)''')
+        conn.commit()
+        print("✅ Database tables created/verified")
+        
+    except Exception as e:
+        print(f"❌ PostgreSQL connection failed: {e}")
+        print("⚠️ Falling back to in-memory SQLite")
+        import sqlite3
+        conn = sqlite3.connect(':memory:', check_same_thread=False)
+        cursor = conn.cursor()
 
 # ========== HELPER FUNCTIONS ==========
 def calculate_expiry_date():
@@ -97,16 +129,16 @@ def days_until_expiry(expiry_date_str):
         return 0
 
 def get_username(user_id):
-    cursor.execute("SELECT username FROM users WHERE user_id=?", (user_id,))
+    cursor.execute("SELECT username FROM users WHERE user_id=%s", (user_id,))
     result = cursor.fetchone()
     return result[0] if result else f"User_{user_id}"
 
 def ban_user(user_id, reason="Scam/fraud"):
     username = get_username(user_id)
-    cursor.execute("INSERT OR REPLACE INTO banned_users VALUES (?, ?, ?, ?)",
-                   (user_id, username, datetime.now().isoformat(), reason))
-    cursor.execute("UPDATE users SET status='banned' WHERE user_id=?", (user_id,))
-    cursor.execute("DELETE FROM pending_approvals WHERE user_id=?", (user_id,))
+    cursor.execute("INSERT INTO banned_users VALUES (%s, %s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET username=%s, ban_date=%s, reason=%s",
+                   (user_id, username, datetime.now().isoformat(), reason, username, datetime.now().isoformat(), reason))
+    cursor.execute("UPDATE users SET status='banned' WHERE user_id=%s", (user_id,))
+    cursor.execute("DELETE FROM pending_approvals WHERE user_id=%s", (user_id,))
     conn.commit()
     return username
 
@@ -142,7 +174,7 @@ New set dropping tonight! 🌶️""",
 def send_welcome(message):
     user_id = message.from_user.id
     
-    cursor.execute("SELECT * FROM banned_users WHERE user_id=?", (user_id,))
+    cursor.execute("SELECT * FROM banned_users WHERE user_id=%s", (user_id,))
     if cursor.fetchone():
         safe_send_message(message.chat.id, "🚫 *ACCESS DENIED*\nYou have been permanently banned.")
         return
@@ -180,11 +212,11 @@ def send_welcome(message):
 def check_status(message):
     user_id = message.from_user.id
     
-    cursor.execute("SELECT * FROM banned_users WHERE user_id=?", (user_id,))
+    cursor.execute("SELECT * FROM banned_users WHERE user_id=%s", (user_id,))
     if cursor.fetchone():
         return
     
-    cursor.execute("SELECT expiry_date, status FROM users WHERE user_id=?", (user_id,))
+    cursor.execute("SELECT expiry_date, status FROM users WHERE user_id=%s", (user_id,))
     result = cursor.fetchone()
     
     if not result:
@@ -231,19 +263,18 @@ def send_main_group_link(message):
                     f"{MAIN_GROUP_LINK}\n\n"
                     f"Always open! Join for free content 💋")
 
-# ⭐⭐⭐ OVO JE KLJUČNA PROMENA ⭐⭐⭐
 @bot.message_handler(content_types=['photo'])
 def handle_payment_screenshot(message):
     user_id = message.from_user.id
     username = message.from_user.username or f"User_{user_id}"
     safe_username = escape_markdown(username)
     
-    cursor.execute("SELECT * FROM banned_users WHERE user_id=?", (user_id,))
+    cursor.execute("SELECT * FROM banned_users WHERE user_id=%s", (user_id,))
     if cursor.fetchone():
         safe_send_message(message.chat.id, "🚫 You are banned.")
         return
     
-    cursor.execute("SELECT * FROM pending_approvals WHERE user_id=?", (user_id,))
+    cursor.execute("SELECT * FROM pending_approvals WHERE user_id=%s", (user_id,))
     if cursor.fetchone():
         safe_send_message(message.chat.id,
                         "⏳ *Already pending approval!*\n"
@@ -252,8 +283,8 @@ def handle_payment_screenshot(message):
     
     print(f"📸 Screenshot from: @{username}")
     
-    cursor.execute("INSERT INTO pending_approvals VALUES (?, ?, ?)",
-                   (user_id, username, datetime.now().isoformat()))
+    cursor.execute("INSERT INTO pending_approvals VALUES (%s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET username=%s, request_time=%s",
+                   (user_id, username, datetime.now().isoformat(), username, datetime.now().isoformat()))
     conn.commit()
     
     # Poruka za korisnika
@@ -272,8 +303,7 @@ def handle_payment_screenshot(message):
     
     safe_send_message(message.chat.id, user_message)
     
-    # ⭐ DOBIJAMO FILE_ID OD SLIKE ⭐
-    # Najveća rezolucija slike (zadnja u listi)
+    # Najveća rezolucija slike
     photo_file_id = message.photo[-1].file_id
     
     # Caption za sliku
@@ -288,7 +318,7 @@ def handle_payment_screenshot(message):
 ✅ Approve: `/approve_{user_id}`
 ❌ Reject: `/reject_{user_id}`"""
     
-    # ⭐ ŠALJEMO SLIKU ADMINIMA ⭐
+    # Šaljemo sliku adminima
     notified = notify_admins_with_photo(photo_file_id, caption)
     print(f"🔄 Pending: @{username} | Photo sent to {notified} admin(s)")
 
@@ -394,7 +424,7 @@ def approve_user(message):
     try:
         user_id = int(message.text.split('_')[1])
         
-        cursor.execute("SELECT username FROM pending_approvals WHERE user_id=?", (user_id,))
+        cursor.execute("SELECT username FROM pending_approvals WHERE user_id=%s", (user_id,))
         result = cursor.fetchone()
         
         if not result:
@@ -406,12 +436,15 @@ def approve_user(message):
         expiry_date = calculate_expiry_date()
         expiry_formatted = datetime.fromisoformat(expiry_date).strftime('%d %B %Y')
         
-        cursor.execute('''INSERT OR REPLACE INTO users 
+        cursor.execute('''INSERT INTO users 
                           (user_id, username, payment_date, expiry_date, status, used_invite) 
-                          VALUES (?, ?, ?, ?, ?, ?)''',
-                       (user_id, username, datetime.now().isoformat(), expiry_date, 'active', 0))
+                          VALUES (%s, %s, %s, %s, %s, %s)
+                          ON CONFLICT (user_id) DO UPDATE SET 
+                          username=%s, payment_date=%s, expiry_date=%s, status=%s, used_invite=%s''',
+                       (user_id, username, datetime.now().isoformat(), expiry_date, 'active', 0,
+                        username, datetime.now().isoformat(), expiry_date, 'active', 0))
         
-        cursor.execute("DELETE FROM pending_approvals WHERE user_id=?", (user_id,))
+        cursor.execute("DELETE FROM pending_approvals WHERE user_id=%s", (user_id,))
         conn.commit()
         
         user_message = f"""✅ *PAYMENT APPROVED!*
@@ -470,7 +503,7 @@ def reject_user(message):
         
         banned_username = ban_user(user_id, "Fake payment")
         
-        cursor.execute("DELETE FROM pending_approvals WHERE user_id=?", (user_id,))
+        cursor.execute("DELETE FROM pending_approvals WHERE user_id=%s", (user_id,))
         conn.commit()
         
         try:

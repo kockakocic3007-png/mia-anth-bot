@@ -1,2 +1,2 @@
-python-telegram-bot[job-queue]==20.7
-Flask
+pyTelegramBotAPI==4.24.0
+Flask==3.1.2
